@@ -1,51 +1,108 @@
 import numpy as np
 import random
 import matplotlib.pyplot as plt
+from scipy.io import loadmat
 
-# Energy function to compute edge differences between adjacent tiles
-def compute_energy(tiles):
-    energy = 0
-    # Compare each tile with its right and bottom neighbors (if any)
-    for i in range(grid_size):
-        for j in range(grid_size):
-            if j < grid_size - 1:
-                energy += np.sum(np.abs(tiles[i, j][:, -1] - tiles[i, j + 1][:, 0]))  # Right edge comparison
-            if i < grid_size - 1:
-                energy += np.sum(np.abs(tiles[i, j][-1, :] - tiles[i + 1, j][0, :]))  # Bottom edge comparison
-    return energy
+# Load the scrambled image from the .mat file
+data = loadmat('scrambled_lena.mat')
+image_data = data['scrambled_lena']  # Ensure this key matches the .mat structure
 
-# Simulated annealing function
-def simulated_annealing(tiles, max_iter=10000, initial_temp=1.0, cooling_rate=0.99):
-    current_state = tiles.copy()
-    current_energy = compute_energy(current_state)
-    temperature = initial_temp
-    
-    for iteration in range(max_iter):
-        # Swap two random tiles
-        i1, j1 = random.randint(0, grid_size - 1), random.randint(0, grid_size - 1)
-        i2, j2 = random.randint(0, grid_size - 1), random.randint(0, grid_size - 1)
-        new_state = current_state.copy()
-        new_state[i1, j1], new_state[i2, j2] = new_state[i2, j2], new_state[i1, j1]
-        
-        # Calculate energy of the new state
-        new_energy = compute_energy(new_state)
-        energy_diff = new_energy - current_energy
-        
-        # Decide whether to accept the new state
-        if energy_diff < 0 or random.random() < np.exp(-energy_diff / temperature):
+# Parameters
+TILE_COUNT = 9  # Number of pieces (3x3 puzzle)
+START_TEMP = 1000  # Initial temperature for simulated annealing
+TEMP_DECAY = 0.99  # Cooling rate
+ITERATION_LIMIT = 10000  # Number of iterations for annealing
+
+# Function to show an image with an optional title
+def show_image(image, title="Image"):
+    plt.imshow(image, cmap='gray')
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
+
+# Function to calculate the dissimilarity score for puzzle configuration
+def evaluate_puzzle_fitness(arrangement, pieces):
+    fitness_score = 0
+    grid_size = int(np.sqrt(len(pieces)))
+
+    for row in range(grid_size):
+        for col in range(grid_size):
+            current_tile = pieces[arrangement[row * grid_size + col]]
+            # Compare with tile above (top-bottom match)
+            if row > 0:
+                above_tile = pieces[arrangement[(row-1) * grid_size + col]]
+                fitness_score += np.sum(np.abs(current_tile[0, :] - above_tile[-1, :]))
+            # Compare with tile to the left (left-right match)
+            if col > 0:
+                left_tile = pieces[arrangement[row * grid_size + (col-1)]]
+                fitness_score += np.sum(np.abs(current_tile[:, 0] - left_tile[:, -1]))
+    return fitness_score
+
+# Function to shuffle two randomly selected tiles
+def swap_random_tiles(arrangement):
+    new_arrangement = arrangement.copy()
+    tile_a, tile_b = random.sample(range(len(arrangement)), 2)
+    new_arrangement[tile_a], new_arrangement[tile_b] = new_arrangement[tile_b], new_arrangement[tile_a]
+    return new_arrangement
+
+# Simulated annealing to find the optimal arrangement of puzzle pieces
+def optimize_puzzle_arrangement(pieces):
+    current_state = list(range(len(pieces)))  # Initial arrangement of tiles
+    current_fitness = evaluate_puzzle_fitness(current_state, pieces)
+    temperature = START_TEMP
+
+    for step in range(ITERATION_LIMIT):
+        # Get a new state by swapping two pieces
+        new_state = swap_random_tiles(current_state)
+        new_fitness = evaluate_puzzle_fitness(new_state, pieces)
+
+        # Accept new arrangement if it's better or probabilistically based on temperature
+        if new_fitness < current_fitness or random.random() < np.exp((current_fitness - new_fitness) / temperature):
             current_state = new_state
-            current_energy = new_energy
-        
-        # Cool down the system
-        temperature *= cooling_rate
-        
-        # Optionally, print the progress or display the current puzzle arrangement
-        if iteration % 100 == 0:
-            print(f"Iteration {iteration}, Energy: {current_energy}")
-            plt.imshow(np.block(current_state), cmap='gray')
-            plt.show()
+            current_fitness = new_fitness
+
+        # Cool down the temperature
+        temperature *= TEMP_DECAY
+
+        # Periodically log the progress
+        if step % 1000 == 0:
+            print(f"Step {step}, Fitness: {current_fitness}, Temperature: {temperature}")
+
+        # Terminate early if puzzle is solved (fitness score is 0)
+        if current_fitness == 0:
+            break
 
     return current_state
 
-# Assuming 'tiles' is a 2D array where each entry is a tile from the scrambled image
-final_state = simulated_annealing(tiles)
+# Function to break the image into smaller square tiles
+def cut_image_into_tiles(image, num_tiles):
+    height, width = image.shape
+    tile_height, tile_width = height // num_tiles, width // num_tiles
+    return [image[i * tile_height:(i + 1) * tile_height, j * tile_width:(j + 1) * tile_width]
+            for i in range(num_tiles) for j in range(num_tiles)]
+
+# Function to reconstruct the image from the tile arrangement
+def reconstruct_image(arrangement, pieces, num_tiles):
+    tile_height, tile_width = pieces[0].shape
+    reconstructed_image = np.zeros((tile_height * num_tiles, tile_width * num_tiles), dtype=pieces[0].dtype)
+
+    for row in range(num_tiles):
+        for col in range(num_tiles):
+            reconstructed_image[row * tile_height:(row + 1) * tile_height, col * tile_width:(col + 1) * tile_width] = pieces[arrangement[row * num_tiles + col]]
+
+    return reconstructed_image
+
+# Main execution
+if __name__ == "__main__":
+    # Display the scrambled puzzle image
+    show_image(image_data, "Scrambled Puzzle")
+
+    # Split the scrambled image into individual tiles
+    puzzle_tiles = cut_image_into_tiles(image_data, int(np.sqrt(TILE_COUNT)))
+
+    # Use simulated annealing to solve the puzzle
+    final_tile_order = optimize_puzzle_arrangement(puzzle_tiles)
+
+    # Rebuild and display the solved image
+    solved_image = reconstruct_image(final_tile_order, puzzle_tiles, int(np.sqrt(TILE_COUNT)))
+    show_image(solved_image, "Solved Puzzle")
